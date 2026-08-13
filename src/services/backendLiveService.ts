@@ -1439,7 +1439,9 @@ export class BackendLiveService {
       resScreenDetection.resultadoScreenDetected,
       resScreenDetection.confidence,
       sessao.sessionId,
-      sessao.totalFrames
+      sessao.totalFrames,
+      Date.now(),
+      analyzerInputGap
     );
 
     const tAnaEnd = Date.now();

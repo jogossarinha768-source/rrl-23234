@@ -144,6 +144,10 @@ export interface AnalyzerMetrics {
 export const VISION_ANALYZER_CONFIG = {
   MIN_CONFIRMATIONS: 3,
   MIN_CONFIDENCE: 85,
+  MIN_CANDIDATE_SCORE: 55,
+  MIN_CONFIRMATION_SCORE: 75,
+  MIN_CONFIRMATION_GAP: 3,
+  MIN_CONFIRMATION_FRAMES: 3,
   STABILITY_WINDOW_MS: 1000,
   MAX_CONFIRMATION_WINDOW_MS: 3000,
   SUSTAINED_UNIDENTIFIED_FRAMES_TO_RESET: 3,
@@ -179,8 +183,11 @@ export class WheelVisionAnalyzer {
   private lastConfidence: number = 0;
   private lastGap: number = 0;
 
-  private minimumConfirmations: number = VISION_ANALYZER_CONFIG.MIN_CONFIRMATIONS;
+  private minimumConfirmations: number = VISION_ANALYZER_CONFIG.MIN_CONFIRMATION_FRAMES;
   private minConfidence: number = VISION_ANALYZER_CONFIG.MIN_CONFIDENCE;
+  private minCandidateScore: number = VISION_ANALYZER_CONFIG.MIN_CANDIDATE_SCORE;
+  private minConfirmationScore: number = VISION_ANALYZER_CONFIG.MIN_CONFIRMATION_SCORE;
+  private minConfirmationGap: number = VISION_ANALYZER_CONFIG.MIN_CONFIRMATION_GAP;
   private stabilityWindowMs: number = VISION_ANALYZER_CONFIG.STABILITY_WINDOW_MS;
   private maxConfirmationWindowMs: number = VISION_ANALYZER_CONFIG.MAX_CONFIRMATION_WINDOW_MS;
 
@@ -1080,9 +1087,12 @@ export class WheelVisionAnalyzer {
       objetoNormalizado !== 'nenhum' &&
       objetoNormalizado !== 'nao_identificado' &&
       OBJETOS_RODA_PERMITIDOS.includes(objetoNormalizado as ObjetoRodaPermitido) &&
-      confiancaRaw >= 55;
+      confiancaRaw >= this.minCandidateScore;
 
-    const isConfirmationEligible = hasCandidate && confiancaRaw >= this.minConfidence && gapPct >= 3;
+    const isConfirmationEligible =
+      hasCandidate &&
+      confiancaRaw >= this.minConfirmationScore &&
+      gapPct >= this.minConfirmationGap;
 
     if (hasCandidate) {
       const objetoValido = objetoNormalizado!;

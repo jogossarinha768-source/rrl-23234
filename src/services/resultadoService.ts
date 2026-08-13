@@ -26,7 +26,7 @@ export const OBJETOS_PERMITIDOS = [
   'coroa',
 ] as const;
 
-export const MIN_CONFIDENCE = 80;
+export const MIN_CONFIDENCE = 75;
 
 // CONTROLE RIGOROSO DE AUTO-PERSISTÊNCIA (MANDATÓRIO REQUISITO #1)
 // Habilitado por padrão para execuções reais do Live API (AUTO_PERSIST_ENABLED = true por padrão).
@@ -46,6 +46,13 @@ export const AUTO_PERSIST_ENABLED = autoPersistFlag;
 const persistedEventIds = new Set<string>();
 const activePersistLocks = new Map<string, Promise<AutoRegisterResult>>();
 const sessionInsertTimestamps = new Map<string, number[]>();
+
+export function clearPersistedEventIdsCache(): void {
+  persistedEventIds.clear();
+  activePersistLocks.clear();
+  sessionInsertTimestamps.clear();
+  activeScreenLifecycleMap.clear();
+}
 
 export interface ActiveScreenLifecycle {
   inFlight: boolean;

@@ -46,9 +46,19 @@ export class LocalWheelRecognizer {
     LOCAL_RECOGNITION_ENABLED: true,
     GEMINI_FALLBACK_ENABLED: false,
     LOCAL_ONLY_MODE: true,
-    LOCAL_CONFIDENCE_THRESHOLD: 0.85, // 85%
+    LOCAL_CONFIDENCE_THRESHOLD: 0.75, // 75% para elegibilidade de confirmação
     LOCAL_RECOGNITION_DEBUG: true,
   };
+
+  /**
+   * Score mínimo para preservação do candidato como WEAK_CANDIDATE (55%).
+   */
+  public static readonly MIN_CANDIDATE_THRESHOLD = 0.55;
+
+  /**
+   * Score mínimo para elegibilidade de confirmação (75%).
+   */
+  public static readonly MIN_CONFIRMATION_THRESHOLD = 0.75;
 
   /**
    * Margem/Gap mínimo entre o 1º e o 2º colocado para aceitar o resultado (3.0%).

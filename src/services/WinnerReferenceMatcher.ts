@@ -63,23 +63,22 @@ export interface ROIValidationResult {
  */
 export class WinnerReferenceMatcher {
   /**
-   * Confiança mínima absoluta.
-   *
-   * Abaixo disso o resultado é considerado inseguro.
+   * Confiança mínima absoluta (85% para diagnóstico / referência de alta certeza).
    */
   public static readonly MIN_CONFIDENCE_THRESHOLD = 85;
 
   /**
-   * Diferença mínima entre o primeiro e o segundo candidato.
-   *
-   * Exemplo:
-   *
-   * BALAO = 91
-   * SORVETE = 72
-   *
-   * GAP = 19
-   *
-   * Resultado seguro.
+   * Score mínimo para preservação do candidato como WEAK_CANDIDATE (55%).
+   */
+  public static readonly MIN_CANDIDATE_THRESHOLD = 55;
+
+  /**
+   * Score mínimo para elegibilidade de confirmação (75%).
+   */
+  public static readonly MIN_CONFIRMATION_THRESHOLD = 75;
+
+  /**
+   * Diferença mínima entre o primeiro e o segundo candidato (3.0%).
    */
   public static readonly MIN_GAP_THRESHOLD = 3.0;
 
@@ -349,20 +348,24 @@ export class WinnerReferenceMatcher {
       rawCandidate as WheelObjectName;
 
     /**
-     * Confiança precisa ser suficiente.
+     * Confiança e Gap:
+     * - score < 55: NO_MATCH, candidate = 'nenhum'
+     * - score >= 55 & gap < 3.0: AMBIGUOUS, candidate preservado
+     * - score >= 55 & score < 75 & gap >= 3.0: WEAK_CANDIDATE, candidate preservado
+     * - score >= 75 & gap >= 3.0: CONFIRMATION_ELIGIBLE, candidate elegível para confirmação
      */
     const gap = Math.max(0, primaryScore - secondScore);
+    const hasSecondCandidate =
+      secondCandidate &&
+      secondCandidate !== 'nenhum' &&
+      isAllowedWheelObject(secondCandidate);
 
-    if (primaryScore < this.MIN_CONFIDENCE_THRESHOLD) {
-      const isProvisional = primaryScore >= 55 && isAllowedWheelObject(candidate);
-      const isAmbiguous = isProvisional && gap < this.MIN_GAP_THRESHOLD;
-      const status = isProvisional ? (isAmbiguous ? 'AMBIGUOUS' : 'WEAK_CANDIDATE') : 'NO_MATCH';
-
+    if (primaryScore < this.MIN_CANDIDATE_THRESHOLD) {
       return {
-        objeto: isProvisional ? candidate : 'nenhum',
+        objeto: 'nenhum',
         confianca: primaryScore,
         referencia: null,
-        status,
+        status: 'NO_MATCH',
         segundoMelhor:
           isAllowedWheelObject(secondCandidate)
             ? secondCandidate
@@ -370,67 +373,37 @@ export class WinnerReferenceMatcher {
         scoreSegundoMelhor: secondScore,
         gap,
         reason:
-          `Confiança insuficiente: ` +
+          `Score abaixo do mínimo de candidato: ` +
           `${primaryScore.toFixed(1)}% ` +
-          `< ${this.MIN_CONFIDENCE_THRESHOLD}%`,
-
+          `< ${this.MIN_CANDIDATE_THRESHOLD}%`,
         diagnostico: {
-          candidatosTestados:
-            this.EXPECTED_REFERENCE_COUNT,
-
+          candidatosTestados: this.EXPECTED_REFERENCE_COUNT,
           referenciaOficialEncontrada: true,
-
           scorePrincipal: primaryScore,
-
           scoreSegundo: secondScore,
-
-          gap: Math.max(
-            0,
-            primaryScore - secondScore
-          ),
-
-          thresholdConfianca:
-            this.MIN_CONFIDENCE_THRESHOLD,
-
-          thresholdGap:
-            this.MIN_GAP_THRESHOLD,
+          gap,
+          thresholdConfianca: this.MIN_CONFIRMATION_THRESHOLD,
+          thresholdGap: this.MIN_GAP_THRESHOLD,
         },
       };
     }
 
-    /**
-     * Se não existe segundo candidato,
-     * não devemos fabricar um gap.
-     */
-    const hasSecondCandidate =
-      secondCandidate &&
-      secondCandidate !== 'nenhum' &&
-      isAllowedWheelObject(secondCandidate);
+    const isAmbiguous = gap < this.MIN_GAP_THRESHOLD;
+    const isConfirmationEligible = primaryScore >= this.MIN_CONFIRMATION_THRESHOLD && !isAmbiguous;
+    const isWeakCandidate = primaryScore >= this.MIN_CANDIDATE_THRESHOLD && !isConfirmationEligible && !isAmbiguous;
 
-    /**
-     * Se existe segundo candidato e a diferença
-     * é pequena, classificamos como divergência/ambíguo mas preservamos o candidato.
-     */
-    if (
-      hasSecondCandidate &&
-      gap < this.MIN_GAP_THRESHOLD
-    ) {
+    if (isAmbiguous) {
       return {
         objeto: candidate,
-
         confianca: primaryScore,
-
         referencia: null,
-
         status: 'AMBIGUOUS',
-
         segundoMelhor:
-          secondCandidate as WheelObjectName,
-
+          isAllowedWheelObject(secondCandidate)
+            ? secondCandidate
+            : 'nenhum',
         scoreSegundoMelhor: secondScore,
-
         gap,
-
         reason:
           `Classificação ambígua: ` +
           `${candidate}=${primaryScore.toFixed(1)}% ` +
@@ -438,24 +411,42 @@ export class WinnerReferenceMatcher {
           `${secondCandidate}=${secondScore.toFixed(1)}%. ` +
           `GAP=${gap.toFixed(1)}% ` +
           `< ${this.MIN_GAP_THRESHOLD}%`,
-
         diagnostico: {
-          candidatosTestados:
-            this.EXPECTED_REFERENCE_COUNT,
-
+          candidatosTestados: this.EXPECTED_REFERENCE_COUNT,
           referenciaOficialEncontrada: true,
-
           scorePrincipal: primaryScore,
-
           scoreSegundo: secondScore,
-
           gap,
+          thresholdConfianca: this.MIN_CONFIRMATION_THRESHOLD,
+          thresholdGap: this.MIN_GAP_THRESHOLD,
+        },
+      };
+    }
 
-          thresholdConfianca:
-            this.MIN_CONFIDENCE_THRESHOLD,
-
-          thresholdGap:
-            this.MIN_GAP_THRESHOLD,
+    if (isWeakCandidate) {
+      return {
+        objeto: candidate,
+        confianca: primaryScore,
+        referencia: null,
+        status: 'WEAK_CANDIDATE',
+        segundoMelhor:
+          isAllowedWheelObject(secondCandidate)
+            ? secondCandidate
+            : 'nenhum',
+        scoreSegundoMelhor: secondScore,
+        gap,
+        reason:
+          `Candidato fraco preservado: ` +
+          `${primaryScore.toFixed(1)}% ` +
+          `< ${this.MIN_CONFIRMATION_THRESHOLD}% (mínimo de confirmação)`,
+        diagnostico: {
+          candidatosTestados: this.EXPECTED_REFERENCE_COUNT,
+          referenciaOficialEncontrada: true,
+          scorePrincipal: primaryScore,
+          scoreSegundo: secondScore,
+          gap,
+          thresholdConfianca: this.MIN_CONFIRMATION_THRESHOLD,
+          thresholdGap: this.MIN_GAP_THRESHOLD,
         },
       };
     }
