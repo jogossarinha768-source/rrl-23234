@@ -209,6 +209,7 @@ export class WheelResultScreenDetector {
     } else {
       // WINNER CROP (SYMBOL_CROP)
       const cropCenterX = resultScreenCenterX + (WheelResultScreenDetector.symbolCenterOffsetX || 0);
+      const cropCenterY = resultScreenCenterY + (WheelResultScreenDetector.symbolCenterOffsetY || 0);
 
       const scale = Math.max(0.40, Math.min(0.85, WheelResultScreenDetector.winnerMatchZoneScale || 0.65));
       const cropSide = Math.max(60, Math.round(Math.min(resultScreenWidth, resultScreenHeight) * scale));
@@ -216,8 +217,7 @@ export class WheelResultScreenDetector {
       symbolCropHeight = cropSide;
 
       symbolCropX = Math.round(cropCenterX - cropSide / 2);
-      // REGRA ABSOLUTA: Posição Y (%) do WINNER CROP é SEMPRE 38.5% (FIXO)
-      symbolCropY = Math.round((38.5 / 100) * originalHeight);
+      symbolCropY = Math.round(cropCenterY - cropSide / 2);
 
       // Sempre aplicar clamp para impedir que o crop saia dos limites da imagem
       symbolCropX = Math.max(0, Math.min(symbolCropX, originalWidth - cropSide));
@@ -238,7 +238,8 @@ export class WheelResultScreenDetector {
     const distX = Math.abs(symbolCropCenterX - resultScreenCenterX);
     const distY = Math.abs(symbolCropCenterY - resultScreenCenterY);
     const distanciaCentroModalParaCentroCrop = Math.round(Math.sqrt(distX * distX + distY * distY));
-    const isAligned = distX <= 20 && distY <= 20;
+    const maxAllowedDist = Math.max(40, Math.round(Math.min(resultScreenWidth, resultScreenHeight) * 0.25));
+    const isAligned = distX <= maxAllowedDist && distY <= maxAllowedDist;
 
     // 3. Análise de características visuais se ImageData for fornecido
     let confidence = 0.92;

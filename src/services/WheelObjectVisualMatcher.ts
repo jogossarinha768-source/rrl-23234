@@ -89,9 +89,9 @@ export interface ReferenceCacheEntry {
 export class WheelObjectVisualMatcher {
   /**
    * Score mínimo absoluto para considerar uma correspondência válida (0 a 100).
-   * EXIGÊNCIA RÍGIDA: Mínimo 85% de confiança.
+   * Elegibilidade padrão: 75% de confiança.
    */
-  public static readonly MIN_ACCEPTABLE_SCORE = 85;
+  public static readonly MIN_ACCEPTABLE_SCORE = 75;
 
   /**
    * Score considerado forte (0 a 100).
@@ -415,22 +415,25 @@ export class WheelObjectVisualMatcher {
       };
     }
 
-    // 2. Aplicar Máscara/ROI interna para suprimir a moldura dourada e bordas externas do modal
-    const maskedData = this.applyInnerMaskToBuffer(data, width, height, channels);
+    // 2. Alinhamento de Centroide (Translation Invariance)
+    const centeredData = this.centerAndNormalizeBuffer(data, width, height, channels);
 
-    // 3. Extracao do Núcleo Central (inner core)
+    // 3. Aplicar Máscara/ROI interna para suprimir a moldura dourada e bordas externas do modal
+    const maskedData = this.applyInnerMaskToBuffer(centeredData, width, height, channels);
+
+    // 4. Extracao do Núcleo Central (inner core)
     const centerFeatures = this.createCenterFeatures(maskedData, width, height, channels);
 
-    // 4. Extracao de Grade Espacial (6x6 cells x 4 canais RGB+Sat)
+    // 5. Extracao de Grade Espacial (6x6 cells x 4 canais Chromaticity+Sat)
     const spatialGrid = this.createSpatialGrid(maskedData, width, height, channels);
 
-    // 5. Extracao de dHash (Difference Hash 16x16 = 240 bits)
+    // 6. Extracao de dHash (Difference Hash 16x16 = 240 bits)
     const dHash = this.createDifferenceHash(maskedData, width, height, channels);
 
-    // 6. Extracao de Bordas e Silhueta (Sobel 4x4)
+    // 7. Extracao de Bordas e Silhueta (Sobel 4x4)
     const edges = this.createEdgeMap(maskedData, width, height, channels);
 
-    // 7. Extracao de Histograma de Cor (HSV + RGB = 40 bins)
+    // 8. Extracao de Histograma de Cor (HSV + RGB = 40 bins)
     const colorHistogram = this.createHSVColorHistogram(maskedData, width, height, channels);
 
     return {
@@ -448,6 +451,77 @@ export class WheelObjectVisualMatcher {
   }
 
   /**
+   * Alinha o centroide do símbolo no centro do buffer (width/2, height/2)
+   * garantindo invariância rigorosa a pequenos deslocamentos (translações de ±1 a ±16px).
+   */
+  private static centerAndNormalizeBuffer(
+    data: Buffer,
+    width: number,
+    height: number,
+    channels: number
+  ): Buffer {
+    let sumWeightedX = 0;
+    let sumWeightedY = 0;
+    let totalWeight = 0;
+    const cxTarget = width / 2;
+    const cyTarget = height / 2;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * channels;
+        const r = data[idx] ?? 0;
+        const g = data[idx + 1] ?? r;
+        const b = data[idx + 2] ?? r;
+
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        const sat = max === 0 ? 0 : (max - min) / max;
+        const brightness = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        // Salência de primeiro plano: dá peso a pixels coloridos ou distintos do fundo escuro
+        const weight = (brightness > 28 ? 1 : 0) * (0.25 + 0.75 * sat) * (brightness / 255);
+        if (weight > 0.04) {
+          sumWeightedX += x * weight;
+          sumWeightedY += y * weight;
+          totalWeight += weight;
+        }
+      }
+    }
+
+    if (totalWeight > 40) {
+      const centroidX = sumWeightedX / totalWeight;
+      const centroidY = sumWeightedY / totalWeight;
+      const shiftX = Math.round(cxTarget - centroidX);
+      const shiftY = Math.round(cyTarget - centroidY);
+
+      const maxShift = Math.floor(width * 0.15); // até ±19px em 128x128
+      if (
+        Math.abs(shiftX) <= maxShift &&
+        Math.abs(shiftY) <= maxShift &&
+        (shiftX !== 0 || shiftY !== 0)
+      ) {
+        const aligned = Buffer.alloc(data.length, 0);
+        for (let y = 0; y < height; y++) {
+          const srcY = y - shiftY;
+          if (srcY < 0 || srcY >= height) continue;
+          for (let x = 0; x < width; x++) {
+            const srcX = x - shiftX;
+            if (srcX < 0 || srcX >= width) continue;
+            const destIdx = (y * width + x) * channels;
+            const srcIdx = (srcY * width + srcX) * channels;
+            aligned[destIdx] = data[srcIdx];
+            aligned[destIdx + 1] = data[srcIdx + 1];
+            aligned[destIdx + 2] = data[srcIdx + 2];
+          }
+        }
+        return aligned;
+      }
+    }
+
+    return data;
+  }
+
+  /**
    * Aplica uma máscara circular/elíptica interna no crop para suprimir
    * a moldura dourada externa, brilhos do modal e fundo compartilhado.
    */
@@ -462,10 +536,10 @@ export class WheelObjectVisualMatcher {
     const cy = height / 2;
     const radius = Math.min(width, height) / 2;
 
-    // Raio interno seguro do símbolo central (60% do raio total ~ 46px)
-    const innerR = radius * 0.60;
-    // Raio externo da transição (72% do raio total ~ 55px) - elimina completamente a moldura dourada do modal
-    const outerR = radius * 0.72;
+    // Raio interno seguro do símbolo central (78% do raio total ~ 50px)
+    const innerR = radius * 0.78;
+    // Raio externo da transição (94% do raio total ~ 60px)
+    const outerR = radius * 0.94;
 
     // Cor neutra de fundo (0, 0, 0) para não inflar o produto escalar da similaridade de cosseno
     const bgR = 0;
@@ -780,10 +854,11 @@ export class WheelObjectVisualMatcher {
         if (objectCount === 0) {
           result.push(0, 0, 0, 0);
         } else {
+          const sumNorm = (sumR + sumG + sumB) || 1;
           result.push(
-            sumR / objectCount / 255,
-            sumG / objectCount / 255,
-            sumB / objectCount / 255,
+            sumR / sumNorm,
+            sumG / sumNorm,
+            sumB / sumNorm,
             sumSat / objectCount
           );
         }
@@ -918,10 +993,11 @@ export class WheelObjectVisualMatcher {
         if (count === 0) {
           result.push(0, 0, 0, 0);
         } else {
+          const sumNorm = (sumR + sumG + sumB) || 1;
           result.push(
-            sumR / count / 255,
-            sumG / count / 255,
-            sumB / count / 255,
+            sumR / sumNorm,
+            sumG / sumNorm,
+            sumB / sumNorm,
             sumSat / count
           );
         }
@@ -972,7 +1048,7 @@ export class WheelObjectVisualMatcher {
   private static compareCenterFeatures(a: number[], b: number[]): number {
     if (!a.length || !b.length) return 0;
 
-    // Primeiros 64 valores: grade 4x4 do núcleo
+    // Primeiros 64 valores: grade 4x4 do núcleo (com tolerância espacial de vizinhança)
     const gridA = a.slice(0, 64);
     const gridB = b.slice(0, 64);
 
@@ -980,10 +1056,75 @@ export class WheelObjectVisualMatcher {
     const histA = a.slice(64);
     const histB = b.slice(64);
 
-    const spatialSim = this.vectorSimilarity(gridA, gridB);
+    const spatialSim = this.compareSpatialGridWithTolerance(gridA, gridB, 4, 4);
     const histSim = this.histogramIntersection(histA, histB);
 
-    return Math.max(0, Math.min(100, spatialSim * 0.60 + histSim * 0.40));
+    return Math.max(0, Math.min(100, spatialSim * 0.55 + histSim * 0.45));
+  }
+
+  /**
+   * Comparação com tolerância espacial (Spatial Pyramid Matching) entre células adjacentes,
+   * proporcionando invariância contínua a translações e distorções locais de enquadramento.
+   */
+  private static compareSpatialGridWithTolerance(
+    gridA: number[],
+    gridB: number[],
+    gridDim: number,
+    channelsPerCell: number
+  ): number {
+    if (!gridA.length || !gridB.length) return 0;
+    let totalScore = 0;
+    let activeCells = 0;
+
+    for (let gy = 0; gy < gridDim; gy++) {
+      for (let gx = 0; gx < gridDim; gx++) {
+        const idxA = (gy * gridDim + gx) * channelsPerCell;
+        const rA = gridA[idxA] ?? 0;
+        const gA = gridA[idxA + 1] ?? 0;
+        const bA = gridA[idxA + 2] ?? 0;
+        const satA = gridA[idxA + 3] ?? 0;
+
+        if (rA < 0.001 && gA < 0.001 && bA < 0.001) continue;
+        activeCells++;
+
+        let bestCellSim = 0;
+
+        // Verificar a própria célula e os 8 vizinhos com decaimento espacial suave
+        for (let dy = -1; dy <= 1; dy++) {
+          const ny = gy + dy;
+          if (ny < 0 || ny >= gridDim) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = gx + dx;
+            if (nx < 0 || nx >= gridDim) continue;
+
+            const idxB = (ny * gridDim + nx) * channelsPerCell;
+            const rB = gridB[idxB] ?? 0;
+            const gB = gridB[idxB + 1] ?? 0;
+            const bB = gridB[idxB + 2] ?? 0;
+            const satB = gridB[idxB + 3] ?? 0;
+
+            if (rB < 0.001 && gB < 0.001 && bB < 0.001) continue;
+
+            const diffR = Math.abs(rA - rB);
+            const diffG = Math.abs(gA - gB);
+            const diffB = Math.abs(bA - bB);
+            const diffSat = Math.abs(satA - satB);
+            const meanDiff = (diffR + diffG + diffB + diffSat) / 4;
+
+            const spatialDecay = 1.0 - 0.06 * (Math.abs(dx) + Math.abs(dy));
+            const cellSim = Math.max(0, 100 * (1 - 1.85 * meanDiff)) * spatialDecay;
+            if (cellSim > bestCellSim) {
+              bestCellSim = cellSim;
+            }
+          }
+        }
+
+        totalScore += bestCellSim;
+      }
+    }
+
+    if (activeCells === 0) return 0;
+    return Math.round((totalScore / activeCells) * 100) / 100;
   }
 
   /**
@@ -1003,28 +1144,30 @@ export class WheelObjectVisualMatcher {
     edge: number;
     center: number;
   } {
-    // 1. Núcleo Central (40%)
+    // 1. Núcleo Central (35%)
     const center = this.compareCenterFeatures(
       input.centerFeatures,
       reference.centerFeatures
     );
 
-    // 2. Grade Espacial do Objeto (25%)
-    const spatial = this.vectorSimilarity(
+    // 2. Grade Espacial do Objeto com Tolerância Espacial (25%)
+    const spatial = this.compareSpatialGridWithTolerance(
       input.spatialGrid,
-      reference.spatialGrid
+      reference.spatialGrid,
+      6,
+      4
     );
 
-    // 3. Estrutura de Bordas/Sobel (15%)
-    const edge = this.vectorSimilarity(
-      input.edges,
-      reference.edges
-    );
-
-    // 4. Histograma de Cor do Objeto (10%)
+    // 3. Histograma de Cor do Objeto - Invariante a posição (20%)
     const histogram = this.histogramIntersection(
       input.colorHistogram,
       reference.colorHistogram
+    );
+
+    // 4. Estrutura de Bordas/Sobel (10%)
+    const edge = this.vectorSimilarity(
+      input.edges,
+      reference.edges
     );
 
     // 5. dHash da Caixa Central (10%)
@@ -1034,19 +1177,19 @@ export class WheelObjectVisualMatcher {
     );
 
     /**
-     * PONDERAÇÃO REBALANCEADA (SÍMBOLO x FUNDO):
-     * - núcleo central: 40%
-     * - grade espacial do objeto: 25%
-     * - estrutura de bordas / Sobel: 15%
-     * - histograma HSV/RGB do objeto: 10%
+     * PONDERAÇÃO CALIBRADA (SÍMBOLO x FUNDO):
+     * - núcleo central (tolerância espacial): 35%
+     * - grade espacial do objeto (tolerância espacial): 25%
+     * - histograma HSV/RGB do objeto (invariante a translação): 20%
+     * - estrutura de bordas / Sobel: 10%
      * - dHash central: 10%
      * TOTAL = 100%
      */
     const totalRaw =
-      center * 0.40 +
+      center * 0.35 +
       spatial * 0.25 +
-      edge * 0.15 +
-      histogram * 0.10 +
+      histogram * 0.20 +
+      edge * 0.10 +
       hash * 0.10;
 
     const total = Math.max(0, Math.min(100, Math.round(totalRaw * 100) / 100));
@@ -1097,8 +1240,8 @@ export class WheelObjectVisualMatcher {
 
     if (activeCount === 0) return 0;
     const meanDiff = diffSum / activeCount;
-    // Escala discriminativa em cima do objeto: meanDiff=0 -> 100%, meanDiff=0.20 -> 50%, meanDiff>=0.40 -> 0%
-    const sim = Math.max(0, 100 * (1 - 2.5 * meanDiff));
+    // Escala discriminativa calibrada: meanDiff=0 -> 100%, meanDiff=0.15 -> 72%, meanDiff>=0.54 -> 0%
+    const sim = Math.max(0, 100 * (1 - 1.85 * meanDiff));
     return Math.round(sim * 100) / 100;
   }
 
