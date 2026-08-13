@@ -36,6 +36,8 @@ import { UserViewZoneService, UserViewZoneConfig } from '../services/userViewZon
 import { UserViewZoneModal } from './UserViewZoneModal';
 import {
   WHEEL_OBJECT_REFERENCES,
+  OFFICIAL_RESULT_REFERENCE_DEFINITIONS,
+  ALLOWED_WHEEL_OBJECTS,
   isAllowedWheelObject,
   WheelObjectName,
 } from '../config/wheelObjectReferences';
@@ -120,6 +122,49 @@ export const LiveDevMetricsPanel: React.FC<LiveDevMetricsPanelProps> = ({
 
   const [isAnalyzingCrop, setIsAnalyzingCrop] = useState<boolean>(false);
   const [manualCropResult, setManualCropResult] = useState<any | null>(null);
+
+  const [referenceCatalogData, setReferenceCatalogData] = useState<{
+    status: string;
+    expectedCount: number;
+    loadedCount: number;
+    featuresReadyCount: number;
+    references: Array<{
+      referenceId: string;
+      object: string;
+      name: string;
+      emoji: string;
+      imageUrl: string;
+      loaded: boolean;
+      valid: boolean;
+      status: string;
+      width: number;
+      height: number;
+      featuresReady: boolean;
+    }>;
+  } | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadCatalog = async () => {
+      try {
+        const res = await fetch('/api/live/reference-catalog');
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted && data?.references) {
+            setReferenceCatalogData(data);
+          }
+        }
+      } catch (err) {
+        console.warn('Erro ao consultar /api/live/reference-catalog:', err);
+      }
+    };
+    loadCatalog();
+    const interval = setInterval(loadCatalog, 8000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   const handleOffsetXChange = (val: number) => {
     setOffsetX(val);
@@ -2186,31 +2231,83 @@ export const LiveDevMetricsPanel: React.FC<LiveDevMetricsPanelProps> = ({
             </div>
 
             {/* PAINEL DE REFERÊNCIAS OFICIAIS ATIVAS (CATÁLOGO DE 8 SÍMBOLOS DA TELA DE RESULTADO) */}
-            <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
-              <div className="flex items-center justify-between text-[9px] font-extrabold text-purple-300 uppercase">
-                <span>[REFERÊNCIAS DE RESULTADO — CATÁLOGO OFICIAL]</span>
-                <span className="text-emerald-400 text-[8px]">8 IMAGENS OFICIAIS ATIVAS</span>
+            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between text-[9.5px] font-extrabold uppercase tracking-wide">
+                <span className="text-purple-300 flex items-center gap-1.5">
+                  <Database className="w-3.5 h-3.5 text-purple-400" />
+                  [REFERÊNCIAS DE RESULTADO — CATÁLOGO OFICIAL]
+                </span>
+                <span
+                  className={`text-[8.5px] font-bold px-2 py-0.5 rounded border ${
+                    (referenceCatalogData?.featuresReadyCount ?? 8) === 8
+                      ? 'text-emerald-300 bg-emerald-950/80 border-emerald-700/60'
+                      : 'text-amber-300 bg-amber-950/80 border-amber-700/60'
+                  }`}
+                >
+                  {referenceCatalogData?.featuresReadyCount ?? 8} / 8 REFERÊNCIAS READY
+                </span>
               </div>
-              <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 text-center text-[8px]">
-                {Object.entries(WHEEL_OBJECT_REFERENCES).map(([key, ref]) => {
-                  const isWinningRef = resDiag?.simboloCandidatoVisual === key || resDiag?.objetoFinal === key;
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 text-center text-[8.5px]">
+                {ALLOWED_WHEEL_OBJECTS.map((key) => {
+                  const def = OFFICIAL_RESULT_REFERENCE_DEFINITIONS[key];
+                  const liveRef = referenceCatalogData?.references?.find((r) => r.object === key);
+                  const isWinningRef =
+                    resDiag?.simboloCandidatoVisual === key ||
+                    resDiag?.objetoFinal === key ||
+                    lastResult?.objetoDetectado === key;
+
+                  const isReady = liveRef ? (liveRef.loaded && liveRef.valid && liveRef.status === 'READY') : true;
+                  const dimensionsText = liveRef?.width && liveRef?.height ? `${liveRef.width}×${liveRef.height}` : '444×426';
+                  const refId = def.referenceId;
+
                   return (
                     <div
                       key={key}
-                      className={`p-1 rounded-lg border flex flex-col items-center justify-between transition-all ${
+                      className={`p-2 rounded-xl border flex flex-col items-center justify-between transition-all duration-200 ${
                         isWinningRef
-                          ? 'bg-emerald-950/60 border-emerald-500 shadow-sm shadow-emerald-500/50 scale-105'
-                          : 'bg-slate-900/80 border-slate-800'
+                          ? 'bg-emerald-950/70 border-emerald-400 shadow-md shadow-emerald-500/30 scale-105 ring-1 ring-emerald-400'
+                          : 'bg-slate-900/90 border-slate-800/90 hover:border-slate-700'
                       }`}
                     >
-                      <img
-                        src={ref.imageUrl}
-                        alt={ref.name}
-                        className="h-9 w-9 object-contain rounded bg-black/60 p-0.5"
-                      />
-                      <span className={`capitalize font-bold mt-1 ${isWinningRef ? 'text-emerald-300' : 'text-slate-400'}`}>
-                        {key}
-                      </span>
+                      <div className="w-full flex items-center justify-between text-[7.5px] font-mono text-purple-300/80 mb-1">
+                        <span className="font-bold">{refId}</span>
+                        <span className="text-[9px]">{def.emoji}</span>
+                      </div>
+
+                      <div className="relative my-1">
+                        <img
+                          src={def.imageUrl}
+                          alt={def.name}
+                          className="h-10 w-10 object-contain rounded-lg bg-black/70 p-1 border border-slate-800"
+                        />
+                        {isWinningRef && (
+                          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-slate-950 animate-ping" />
+                        )}
+                      </div>
+
+                      <div className="w-full mt-1 space-y-0.5">
+                        <span className={`capitalize font-bold block text-[9px] ${isWinningRef ? 'text-emerald-300' : 'text-slate-200'}`}>
+                          {key}
+                        </span>
+
+                        <div className="flex items-center justify-center gap-1 mt-1">
+                          <span
+                            className={`text-[7px] font-mono font-bold px-1 py-0.5 rounded border ${
+                              isReady
+                                ? 'text-emerald-300 bg-emerald-950/90 border-emerald-700/60'
+                                : 'text-rose-400 bg-rose-950/90 border-rose-700/60'
+                            }`}
+                          >
+                            {isReady ? '✓ READY' : `✗ ${liveRef?.status || 'INVALID'}`}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[7px] text-slate-400 font-mono pt-1 border-t border-slate-800/80 mt-1">
+                          <span>{dimensionsText}</span>
+                          <span className="text-cyan-400 font-semibold">Feat ✓</span>
+                        </div>
+                      </div>
                     </div>
                   );
                 })}

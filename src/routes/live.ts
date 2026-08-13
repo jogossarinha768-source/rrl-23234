@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { BackendLiveService } from '../services/backendLiveService';
 import { analyzeCropIsolated } from '../services/cropAnalyzerService';
+import { OfficialResultReferenceCatalog } from '../services/OfficialResultReferenceCatalog';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -158,6 +159,31 @@ router.post('/live/frame', async (req, res) => {
       durationMs,
       backendReceived: true,
       backendProcessed: false,
+    });
+  }
+});
+
+/**
+ * GET /api/live/reference-catalog
+ * Retorna o status e validação do Catálogo Oficial de Referências (8 símbolos).
+ */
+router.get('/live/reference-catalog', async (req, res) => {
+  try {
+    const forceReload = req.query.force === 'true';
+    if (forceReload || OfficialResultReferenceCatalog.getCatalog().length < 8) {
+      await OfficialResultReferenceCatalog.loadAndValidateCatalog(forceReload);
+    }
+    const summary = OfficialResultReferenceCatalog.getDiagnosticSummary();
+    return res.json({
+      sucesso: true,
+      ...summary,
+    });
+  } catch (error: any) {
+    logger.error('Erro na rota GET /api/live/reference-catalog:', error?.message);
+    return res.status(500).json({
+      sucesso: false,
+      error: error?.message || 'Erro ao carregar catálogo oficial de referências.',
+      ...OfficialResultReferenceCatalog.getDiagnosticSummary(),
     });
   }
 });

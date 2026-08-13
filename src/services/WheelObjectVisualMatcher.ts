@@ -5,7 +5,9 @@ import {
   WheelObjectName,
   ALLOWED_WHEEL_OBJECTS,
   isAllowedWheelObject,
+  ReferenceId,
 } from '../config/wheelObjectReferences';
+import { OfficialResultReferenceCatalog } from './OfficialResultReferenceCatalog';
 
 export interface VisualCandidate {
   objeto: WheelObjectName;
@@ -58,7 +60,7 @@ export interface WheelObjectVisualMatchResult {
   };
 }
 
-interface ImageFeatures {
+export interface ImageFeatures {
   width: number;
   height: number;
   isCropValid: boolean;
@@ -77,7 +79,8 @@ interface ImageFeatures {
   centerFeatures: number[]; // inner 50% box features
 }
 
-interface ReferenceCacheEntry {
+export interface ReferenceCacheEntry {
+  referenceId?: ReferenceId;
   object: WheelObjectName;
   url: string;
   features: ImageFeatures;
@@ -115,9 +118,12 @@ export class WheelObjectVisualMatcher {
   private static cacheLoadTimeMs = 0;
 
   public static getReferenceCacheStats() {
+    const catalog = OfficialResultReferenceCatalog.getCatalog();
+    const isLoaded = (!!this.referenceCache && this.referenceCache.length > 0) || catalog.length === 8;
+    const count = this.referenceCache ? this.referenceCache.length : catalog.length;
     return {
-      initialized: !!this.referenceCache && this.referenceCache.length > 0,
-      referencesLoaded: this.referenceCache ? this.referenceCache.length : 0,
+      initialized: isLoaded,
+      referencesLoaded: count,
       loadTimeMs: this.cacheLoadTimeMs,
       cacheHits: this.cacheHits,
       cacheMisses: this.cacheMisses,
@@ -327,11 +333,12 @@ export class WheelObjectVisualMatcher {
    */
 
   public static async warmup(): Promise<void> {
+    await OfficialResultReferenceCatalog.loadAndValidateCatalog();
     await this.loadReferences();
   }
 
   private static async loadReferences(): Promise<ReferenceCacheEntry[]> {
-    if (this.referenceCache) {
+    if (this.referenceCache && this.referenceCache.length === 8) {
       this.cacheHits++;
       return this.referenceCache;
     }
@@ -355,37 +362,13 @@ export class WheelObjectVisualMatcher {
   }
 
   private static async buildReferenceCache(): Promise<ReferenceCacheEntry[]> {
-    const references: ReferenceCacheEntry[] = [];
-
-    for (const objectName of ALLOWED_WHEEL_OBJECTS) {
-      if (!isAllowedWheelObject(objectName)) {
-        continue;
-      }
-
-      const reference = WINNER_REFERENCE_IMAGES[objectName];
-
-      if (!reference?.imageUrl) {
-        console.warn(`[WheelObjectVisualMatcher] Referência ausente: ${objectName}`);
-        continue;
-      }
-
-      try {
-        const features = await this.extractFeatures(reference.imageUrl);
-
-        references.push({
-          object: objectName,
-          url: reference.imageUrl,
-          features,
-        });
-
-        console.log(`[WheelObjectVisualMatcher] Referência oficial carregada: ${objectName}`);
-      } catch (error) {
-        console.error(
-          `[WheelObjectVisualMatcher] Falha ao carregar referência ${objectName}:`,
-          error,
-        );
-      }
-    }
+    const catalog = await OfficialResultReferenceCatalog.loadAndValidateCatalog();
+    const references: ReferenceCacheEntry[] = catalog.map((entry) => ({
+      referenceId: entry.referenceId,
+      object: entry.object,
+      url: entry.imageUrl,
+      features: entry.features!,
+    }));
 
     return references;
   }
@@ -396,7 +379,7 @@ export class WheelObjectVisualMatcher {
    * ============================================================
    */
 
-  private static async extractFeatures(source: string): Promise<ImageFeatures> {
+  public static async extractFeatures(source: string): Promise<ImageFeatures> {
     const input = await this.sourceToBuffer(source);
 
     const processed = await sharp(input)
@@ -516,7 +499,7 @@ export class WheelObjectVisualMatcher {
     return masked;
   }
 
-  private static async sourceToBuffer(source: string): Promise<Buffer> {
+  public static async sourceToBuffer(source: string): Promise<Buffer> {
     if (/^https?:\/\//i.test(source)) {
       const response = await fetch(source);
       if (!response.ok) {
